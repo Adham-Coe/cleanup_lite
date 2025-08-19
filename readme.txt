@@ -14,6 +14,7 @@ Features:
 2. Results Viewer – Displays results in a table with file name, size, and location for review.
 3. Cleanup Action – Lets users safely delete unwanted files from inside the app.
 4. Mini-game Tab – A small interactive “throw crumpled paper into basket” game for fun while cleaning.
+5. Light and Dark Modes - The user can change the theme color between dark and light.
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Major Complex Feature:
 
