@@ -22,23 +22,30 @@ except Exception:  # pragma: no cover
 
 APP_TITLE = "CleanUp Lite"
 SESSION_FILE = "session.json"
-MAX_THREADS = 4 # as per optization guidance
+MAX_THREADS = 4  # as per optimization guidance
 
 
 class App:
-    def __init__(self,root: tk.Tk):
+    def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(APP_TITLE)
         self.root.geometry("980x640")
+        self.root.option_add("*tearOff", False)
 
-        # ----- ADDED: theme state & availability check -----
-        self.theme_mode = tk.StringVar(value="dark")
+        # Theme infra
+        self.style = ttk.Style(self.root)
+        self.sun_valley = False
         try:
-            _has = self.root.call("info", "commands", "set_theme")  # defined by sun-valley.tcl
-            self._has_set_theme = bool(_has)
-        except Exception:
-            self._has_set_theme = False
-        # ---------------------------------------------------
+            # Try Sun Valley if the file exists next to the exe/py
+            if os.path.exists("sun-valley.tcl"):
+                self.root.call("source", "sun-valley.tcl")
+                self.sun_valley = True
+        except tk.TclError:
+            self.sun_valley = False
+
+        # Palette placeholders (filled in _apply_theme)
+        self.colors = {}
+        self.theme = tk.StringVar(value="dark")
 
         # Threading control flags
         self.stop_flag = threading.Event()
@@ -53,12 +60,134 @@ class App:
 
         self._build_ui()
         self._load_session()
+        self._apply_theme(self.theme.get())  # apply after UI exists (also themes MiniGame)
         self._tick_queues()
         if psutil:
             self._tick_memory()
 
         # Save session at exit
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ---------------- THEME ----------------
+    def _apply_theme(self, mode: str) -> None:
+        """Apply Sun Valley if available, else a custom 'clam' palette."""
+        mode = "dark" if mode.lower() == "dark" else "light"
+        self.theme.set(mode)
+
+        if self.sun_valley:
+            # Native Sun Valley theme switching
+            try:
+                self.root.call("set_theme", mode)
+            except tk.TclError:
+                # If set_theme fails, fall back
+                self.sun_valley = False
+
+        if not self.sun_valley:
+            # Fallback: custom palette on 'clam'
+            self.style.theme_use("clam")
+            if mode == "dark":
+                pal = dict(
+                    bg="#1f2125", fg="#e9e9e9", panel="#272a30",
+                    button_bg="#2f333a", button_fg="#e9e9e9", button_active="#3a3f47",
+                    entry_bg="#2b2f36", entry_fg="#e9e9e9",
+                    list_bg="#23262b", sel_bg="#3b6db3", sel_fg="#ffffff",
+                    border="#3a3f46", tab_bg="#2a2e34", tab_active="#272a30",
+                    canvas_bg="#202225", floor_line="#40454d", accent="#9acd32"
+                )
+            else:
+                pal = dict(
+                    bg="#F3F3F3", fg="#111111", panel="#FFFFFF",
+                    button_bg="#E8E8E8", button_fg="#111111", button_active="#DDDDDD",
+                    entry_bg="#FFFFFF", entry_fg="#111111",
+                    list_bg="#FFFFFF", sel_bg="#CCE5FF", sel_fg="#000000",
+                    border="#C9C9C9", tab_bg="#EDEDED", tab_active="#FFFFFF",
+                    canvas_bg="#FAFAFA", floor_line="#C4C4C4", accent="#2E89FF"
+                )
+
+            self.colors = pal  # store for MiniGame use
+
+            # Root/bg
+            self.root.configure(bg=pal["bg"])
+
+            # Base widget families
+            self.style.configure(".", background=pal["bg"], foreground=pal["fg"])
+
+            self.style.configure("TFrame", background=pal["bg"])
+            self.style.configure("TLabelframe", background=pal["bg"], foreground=pal["fg"])
+            self.style.configure("TLabelframe.Label", background=pal["bg"], foreground=pal["fg"])
+
+            # Labels
+            self.style.configure("TLabel", background=pal["bg"], foreground=pal["fg"])
+
+            # Buttons
+            self.style.configure("TButton",
+                                 background=pal["button_bg"],
+                                 foreground=pal["button_fg"],
+                                 bordercolor=pal["border"])
+            self.style.map("TButton",
+                           background=[("active", pal["button_active"])],
+                           foreground=[("disabled", "#888888")])
+
+            # Entries / Spinboxes
+            self.style.configure("TEntry",
+                                 fieldbackground=pal["entry_bg"],
+                                 foreground=pal["entry_fg"])
+            try:
+                self.style.configure("TSpinbox",
+                                     fieldbackground=pal["entry_bg"],
+                                     foreground=pal["entry_fg"],
+                                     background=pal["entry_bg"])
+            except tk.TclError:
+                pass
+
+            # Notebook + Tabs
+            self.style.configure("TNotebook", background=pal["bg"], borderwidth=0)
+            self.style.configure("TNotebook.Tab",
+                                 background=pal["tab_bg"],
+                                 foreground=pal["fg"],
+                                 lightcolor=pal["border"],
+                                 darkcolor=pal["border"],
+                                 bordercolor=pal["border"])
+            self.style.map("TNotebook.Tab",
+                           background=[("selected", pal["tab_active"]), ("active", pal["tab_active"])],
+                           foreground=[("selected", pal["fg"])])
+
+            # Treeview
+            self.style.configure("Treeview",
+                                 background=pal["list_bg"],
+                                 fieldbackground=pal["list_bg"],
+                                 foreground=pal["fg"],
+                                 bordercolor=pal["border"])
+            self.style.map("Treeview",
+                           background=[("selected", pal["sel_bg"])],
+                           foreground=[("selected", pal["sel_fg"])])
+
+            self.style.configure("Treeview.Heading",
+                                 background=pal["tab_bg"],
+                                 foreground=pal["fg"],
+                                 bordercolor=pal["border"])
+
+        else:
+            # Sun Valley active: still set MiniGame palette to match
+            if mode == "dark":
+                self.colors = dict(
+                    canvas_bg="#202225", floor_line="#40454d", accent="#9acd32",
+                    bg="#1f2125", fg="#e9e9e9"  # minimal for any direct uses
+                )
+            else:
+                self.colors = dict(
+                    canvas_bg="#FAFAFA", floor_line="#C4C4C4", accent="#2E89FF",
+                    bg="#F3F3F3", fg="#111111"
+                )
+
+        # Update MiniGame visuals to the new palette
+        if hasattr(self, "game_canvas"):
+            self.game_canvas.configure(bg=self.colors["canvas_bg"])
+            # redraw to apply new line/outline colors
+            self._game_setup()
+
+        # Persist choice
+        self._save_session()
 
     # ---------------- UI BUILD ----------------
     def _build_ui(self) -> None:
@@ -97,6 +226,15 @@ class App:
         )
         ttk.Label(self.home, text=desc, justify=tk.LEFT).pack(**pad)
 
+        # Theme switcher row
+        theme_row = ttk.Frame(self.home)
+        theme_row.pack(fill=tk.X, **pad)
+        ttk.Label(theme_row, text="Theme:").pack(side=tk.LEFT)
+        ttk.Radiobutton(theme_row, text="Light", value="light", variable=self.theme,
+                        command=lambda: self._apply_theme(self.theme.get())).pack(side=tk.LEFT, padx=6)
+        ttk.Radiobutton(theme_row, text="Dark", value="dark", variable=self.theme,
+                        command=lambda: self._apply_theme(self.theme.get())).pack(side=tk.LEFT, padx=6)
+
         frm = ttk.Frame(self.home)
         frm.pack(fill=tk.X, **pad)
         ttk.Label(frm, text="Target folder:").pack(side=tk.LEFT)
@@ -118,20 +256,6 @@ class App:
         # Memory indicator (optional)
         self.mem_label = ttk.Label(self.home, text="Memory: n/a")
         self.mem_label.pack(**pad)
-
-        # ----- ADDED: theme toggle (Light/Dark) -----
-        theme_row = ttk.Frame(self.home)
-        theme_row.pack(fill=tk.X, **pad)
-        ttk.Label(theme_row, text="Appearance:").pack(side=tk.LEFT)
-        ttk.Radiobutton(
-            theme_row, text="Light", value="light", variable=self.theme_mode,
-            command=lambda: self._apply_theme(self.theme_mode.get())
-        ).pack(side=tk.LEFT, padx=6)
-        ttk.Radiobutton(
-            theme_row, text="Dark", value="dark", variable=self.theme_mode,
-            command=lambda: self._apply_theme(self.theme_mode.get())
-        ).pack(side=tk.LEFT, padx=6)
-        # -------------------------------------------
 
     def _build_scan(self) -> None:
         pad = {"padx": 8, "pady": 6}
@@ -328,7 +452,7 @@ class App:
             self.pause_flag.clear()  # go to paused state (waiters will block)
             self._set_status("Paused")
         else:
-            self.pause_flag.set()    # resume workers
+            self.pause_flag.set()  # resume workers
             self._set_status("Resumed")
 
     def stop(self):
@@ -365,7 +489,7 @@ class App:
     def _tick_memory(self):
         if psutil:
             proc = psutil.Process()
-            rss = proc.memory_info().rss / (1024*1024)
+            rss = proc.memory_info().rss / (1024 * 1024)
             self.mem_label.config(text=f"Memory: {rss:.1f} MB  |  Threads: {psutil.Process().num_threads()}")
             self.root.after(1000, self._tick_memory)
 
@@ -379,10 +503,7 @@ class App:
             self.last_folder = data.get('last_folder', self.last_folder)
             self.folder_var.set(self.last_folder)
             self.min_mb.set(int(data.get('min_mb', self.min_mb.get())))
-            # ----- ADDED: restore theme -----
-            self.theme_mode.set(data.get('theme', self.theme_mode.get()))
-            self._apply_theme(self.theme_mode.get())
-            # --------------------------------
+            self.theme.set(data.get('theme', self.theme.get()))
             self.refresh_recycle()
         except Exception:
             pass
@@ -391,9 +512,7 @@ class App:
         data = {
             'last_folder': self.folder_var.get().strip(),
             'min_mb': int(self.min_mb.get()),
-            # ----- ADDED: persist theme -----
-            'theme': self.theme_mode.get(),
-            # --------------------------------
+            'theme': self.theme.get(),
         }
         try:
             with open(SESSION_FILE, 'w', encoding='utf-8') as f:
@@ -406,18 +525,6 @@ class App:
         self._save_session()
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.root.destroy()
-
-    # ----- ADDED: theme apply helper -----
-    def _apply_theme(self, mode: str):
-        if mode not in ("light", "dark"):
-            return
-        try:
-            if self._has_set_theme:
-                self.root.call("set_theme", mode)
-        except Exception:
-            # If sun-valley isn't available, silently ignore.
-            pass
-    # -------------------------------------
 
     # ===================== MiniGame (ADDED) =====================
     def _build_minigame(self) -> None:
@@ -436,7 +543,9 @@ class App:
             anchor="e"
         ).pack(side=tk.RIGHT)
 
-        self.game_canvas = tk.Canvas(self.minigame, bg="#202020", height=480, highlightthickness=0)
+        # Use theme-aware canvas bg (set later in _apply_theme too)
+        self.game_canvas = tk.Canvas(self.minigame, bg=self.colors.get("canvas_bg", "#202020"),
+                                     height=480, highlightthickness=0)
         self.game_canvas.pack(fill=tk.BOTH, expand=True, **pad)
 
         # State
@@ -456,22 +565,26 @@ class App:
         c.config(width=w, height=h)
         c.delete("all")
 
+        floor_color = self.colors.get("floor_line", "#404040")
+        accent = self.colors.get("accent", "#9acd32")
+
         # Floor line
-        c.create_line(0, h-40, w, h-40, fill="#404040", width=2)
+        c.create_line(0, h - 40, w, h - 40, fill=floor_color, width=2)
 
         # Basket (simple bin with open top)
         bx1, by1 = w - 160, h - 160
         bx2, by2 = w - 60, h - 40
-        self.basket_id = c.create_rectangle(bx1, by1, bx2, by2, outline="#9acd32", width=3)
+        self.basket_id = c.create_rectangle(bx1, by1, bx2, by2, outline=accent, width=3)
         # Goal area (slightly inset)
-        self.goal_area = (bx1+8, by1+8, bx2-8, by1+30)
+        self.goal_area = (bx1 + 8, by1 + 8, bx2 - 8, by1 + 30)
         # Visual hoop/opening
-        c.create_rectangle(*self.goal_area, outline="#9acd32", dash=(3, 2))
+        c.create_rectangle(*self.goal_area, outline=accent, dash=(3, 2))
 
         # Paper (circle)
         r = 16
         start_x, start_y = 80, h - 80
-        self.paper_id = c.create_oval(start_x-r, start_y-r, start_x+r, start_y+r, fill="#f5f5f5", outline="#d0d0d0")
+        self.paper_id = c.create_oval(start_x - r, start_y - r, start_x + r, start_y + r,
+                                      fill="#f5f5f5", outline="#d0d0d0")
         c.addtag_withtag("paper", self.paper_id)
 
         # Bindings on the paper only
@@ -583,7 +696,7 @@ class App:
         # brief visual feedback on the hoop
         c = self.game_canvas
         gx1, gy1, gx2, gy2 = self.goal_area
-        glow = c.create_rectangle(gx1, gy1, gx2, gy2, outline="#00ff7f", width=4)
+        glow = c.create_rectangle(gx1, gy1, gx2, gy2, outline=self.colors.get("accent", "#00ff7f"), width=4)
         self.root.after(150, lambda: c.delete(glow))
 
     def _reset_paper(self):
@@ -608,12 +721,6 @@ class App:
 
 def main():
     root = tk.Tk()
-    # nicer default theme on Windows
-    try:
-        root.call("source", "sun-valley.tcl")
-        root.call("set_theme", "dark")
-    except Exception:
-        pass
     App(root)
     root.mainloop()
 
