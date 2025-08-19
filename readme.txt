@@ -16,6 +16,7 @@ Features:
 4. Mini-game Tab – A small interactive “throw crumpled paper into basket” game for fun while cleaning.
 5. Light and Dark Modes - The user can change the theme color between dark and light.
 6. Scan Progress Bar - Allows the user to track scanning progress.
+7. Estimated Remaining Time - Shows the estimated time remaining till the scan is done.
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Major Complex Feature:
 
