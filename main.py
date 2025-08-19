@@ -267,6 +267,14 @@ class App:
         ttk.Button(t, text="Stop", command=self.stop).pack(side=tk.LEFT)
         ttk.Button(t, text="Move Selected to Recycle", command=self.move_selected_large).pack(side=tk.RIGHT)
 
+        # Progress bar row (new)
+        pf = ttk.Frame(self.scan)
+        pf.pack(fill=tk.X, **pad)
+        self.scan_progress = ttk.Progressbar(pf, orient="horizontal", mode="determinate")
+        self.scan_progress.pack(fill=tk.X, side=tk.LEFT, expand=True, padx=6)
+        self.progress_label = ttk.Label(pf, text="0%")
+        self.progress_label.pack(side=tk.LEFT)
+
         # Results tree
         cols = ("path", "size")
         self.large_tree = ttk.Treeview(self.scan, columns=cols, show="headings", selectmode="extended")
@@ -340,11 +348,62 @@ class App:
         self.scan_status.config(text="Scanning…")
         min_bytes = int(self.min_mb.get()) * 1024 * 1024
 
+        # Reset progress UI
+        try:
+            self.scan_progress['value'] = 0
+            self.scan_progress['maximum'] = 1
+        except Exception:
+            pass
+        self.progress_label.config(text="0%")
+
         def worker():
-            for path, size in scanner.big_files(folder, min_bytes, self.stop_flag, self.pause_flag):
-                # send to UI thread
-                self.ui_queue.put(("large", path, size))
-            self.ui_queue.put(("large_done",))
+            # Two-pass approach: first count files to be scanned (denominator)
+            total = 0
+            try:
+                for root_dir, dirs, files in os.walk(folder):
+                    if self.stop_flag.is_set():
+                        break
+                    # respect pause
+                    self.pause_flag.wait()
+                    total += len(files)
+            except Exception:
+                total = max(1, total)
+
+            # report total to UI
+            try:
+                self.ui_queue.put(("scan_total", total))
+            except Exception:
+                pass
+
+            # scanning pass: stat files and emit progress and results
+            scanned = 0
+            try:
+                for root_dir, dirs, files in os.walk(folder):
+                    if self.stop_flag.is_set():
+                        break
+                    # respect pause
+                    self.pause_flag.wait()
+                    for fname in files:
+                        if self.stop_flag.is_set():
+                            break
+                        self.pause_flag.wait()
+                        path = os.path.join(root_dir, fname)
+                        size = 0
+                        try:
+                            size = os.path.getsize(path)
+                        except Exception:
+                            # ignore stat errors
+                            size = 0
+                        scanned += 1
+                        # update progress
+                        self.ui_queue.put(("progress", scanned))
+                        # if file meets large threshold, show it (keeps same UI messages)
+                        if size >= min_bytes:
+                            self.ui_queue.put(("large", path, size))
+                # done
+            finally:
+                # ensure done message always sent
+                self.ui_queue.put(("large_done",))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -470,6 +529,12 @@ class App:
                     _, path, size = item
                     self.large_tree.insert('', tk.END, values=(path, self._human_mb(size)))
                 elif kind == "large_done":
+                    # When scan completes, ensure progress is set to full if possible
+                    try:
+                        if self.scan_progress['maximum'] and self.scan_progress['value'] < self.scan_progress['maximum']:
+                            self.scan_progress['value'] = self.scan_progress['maximum']
+                    except Exception:
+                        pass
                     self.scan_status.config(text="Done ✔")
                 elif kind == "dupe_group":
                     _, gid, group = item
@@ -477,6 +542,25 @@ class App:
                         self.dupe_tree.insert('', tk.END, values=(gid, p))
                 elif kind == "dupe_done":
                     self.dupe_status.config(text="Done ✔")
+                elif kind == "scan_total":
+                    # initialize progress maximum
+                    _, total = item
+                    try:
+                        total = max(1, int(total))
+                        self.scan_progress['maximum'] = total
+                        self.scan_progress['value'] = 0
+                        self.progress_label.config(text=f"0% (0/{total})")
+                    except Exception:
+                        pass
+                elif kind == "progress":
+                    _, scanned = item
+                    try:
+                        total = float(self.scan_progress['maximum'] or 1)
+                        self.scan_progress['value'] = scanned
+                        pct = (scanned / total) * 100.0
+                        self.progress_label.config(text=f"{pct:.0f}% ({scanned}/{int(total)})")
+                    except Exception:
+                        pass
         except queue.Empty:
             pass
         self.root.after(100, self._tick_queues)
