@@ -43,4 +43,4 @@ Usage:
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 License:
 
-Licensed under the MIT License (free to use, modify, distribute).
+Licensed under the MIT License (free to use, modify, distribute)..
