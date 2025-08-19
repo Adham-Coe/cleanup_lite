@@ -31,6 +31,15 @@ class App:
         self.root.title(APP_TITLE)
         self.root.geometry("980x640")
 
+        # ----- ADDED: theme state & availability check -----
+        self.theme_mode = tk.StringVar(value="dark")
+        try:
+            _has = self.root.call("info", "commands", "set_theme")  # defined by sun-valley.tcl
+            self._has_set_theme = bool(_has)
+        except Exception:
+            self._has_set_theme = False
+        # ---------------------------------------------------
+
         # Threading control flags
         self.stop_flag = threading.Event()
         self.pause_flag = threading.Event()
@@ -109,6 +118,20 @@ class App:
         # Memory indicator (optional)
         self.mem_label = ttk.Label(self.home, text="Memory: n/a")
         self.mem_label.pack(**pad)
+
+        # ----- ADDED: theme toggle (Light/Dark) -----
+        theme_row = ttk.Frame(self.home)
+        theme_row.pack(fill=tk.X, **pad)
+        ttk.Label(theme_row, text="Appearance:").pack(side=tk.LEFT)
+        ttk.Radiobutton(
+            theme_row, text="Light", value="light", variable=self.theme_mode,
+            command=lambda: self._apply_theme(self.theme_mode.get())
+        ).pack(side=tk.LEFT, padx=6)
+        ttk.Radiobutton(
+            theme_row, text="Dark", value="dark", variable=self.theme_mode,
+            command=lambda: self._apply_theme(self.theme_mode.get())
+        ).pack(side=tk.LEFT, padx=6)
+        # -------------------------------------------
 
     def _build_scan(self) -> None:
         pad = {"padx": 8, "pady": 6}
@@ -356,6 +379,10 @@ class App:
             self.last_folder = data.get('last_folder', self.last_folder)
             self.folder_var.set(self.last_folder)
             self.min_mb.set(int(data.get('min_mb', self.min_mb.get())))
+            # ----- ADDED: restore theme -----
+            self.theme_mode.set(data.get('theme', self.theme_mode.get()))
+            self._apply_theme(self.theme_mode.get())
+            # --------------------------------
             self.refresh_recycle()
         except Exception:
             pass
@@ -364,6 +391,9 @@ class App:
         data = {
             'last_folder': self.folder_var.get().strip(),
             'min_mb': int(self.min_mb.get()),
+            # ----- ADDED: persist theme -----
+            'theme': self.theme_mode.get(),
+            # --------------------------------
         }
         try:
             with open(SESSION_FILE, 'w', encoding='utf-8') as f:
@@ -376,6 +406,18 @@ class App:
         self._save_session()
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.root.destroy()
+
+    # ----- ADDED: theme apply helper -----
+    def _apply_theme(self, mode: str):
+        if mode not in ("light", "dark"):
+            return
+        try:
+            if self._has_set_theme:
+                self.root.call("set_theme", mode)
+        except Exception:
+            # If sun-valley isn't available, silently ignore.
+            pass
+    # -------------------------------------
 
     # ===================== MiniGame (ADDED) =====================
     def _build_minigame(self) -> None:
