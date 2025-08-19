@@ -274,6 +274,9 @@ class App:
         self.scan_progress.pack(fill=tk.X, side=tk.LEFT, expand=True, padx=6)
         self.progress_label = ttk.Label(pf, text="0%")
         self.progress_label.pack(side=tk.LEFT)
+        # --- ETA label (ADDED) ---
+        self.eta_label = ttk.Label(pf, text="ETA —")
+        self.eta_label.pack(side=tk.LEFT, padx=8)
 
         # Results tree
         cols = ("path", "size")
@@ -336,6 +339,20 @@ class App:
     def _human_mb(self, bytes_val: int) -> str:
         return f"{bytes_val / (1024*1024):.2f}"
 
+    def _format_eta(self, seconds):
+        """Return ETA as h:mm:ss or m:ss; '—' if unknown."""
+        try:
+            if seconds is None or seconds != seconds or seconds < 0:
+                return "—"
+            secs = int(round(seconds))
+            h, rem = divmod(secs, 3600)
+            m, s = divmod(rem, 60)
+            if h > 0:
+                return f"{h}:{m:02d}:{s:02d}"
+            return f"{m}:{s:02d}"
+        except Exception:
+            return "—"
+
     # ------------- Scan (Large Files) -------------
     def start_scan(self):
         folder = self.folder_var.get().strip()
@@ -355,6 +372,16 @@ class App:
         except Exception:
             pass
         self.progress_label.config(text="0%")
+
+        # --- Reset ETA state (ADDED) ---
+        self._scan_start_time = time.time()
+        self._last_progress_t = None
+        self._last_scanned = 0
+        self._rate_ema = None
+        try:
+            self.eta_label.config(text="ETA —")
+        except Exception:
+            pass
 
         def worker():
             # Two-pass approach: first count files to be scanned (denominator)
@@ -510,6 +537,10 @@ class App:
         if self.pause_flag.is_set():
             self.pause_flag.clear()  # go to paused state (waiters will block)
             self._set_status("Paused")
+            try:
+                self.eta_label.config(text="ETA — (paused)")
+            except Exception:
+                pass
         else:
             self.pause_flag.set()  # resume workers
             self._set_status("Resumed")
@@ -518,6 +549,10 @@ class App:
         self.stop_flag.set()
         self.pause_flag.set()  # ensure not stuck
         self._set_status("Stopping…")
+        try:
+            self.eta_label.config(text="ETA —")
+        except Exception:
+            pass
 
     # ------------- UI queue pump -------------
     def _tick_queues(self):
@@ -535,6 +570,10 @@ class App:
                             self.scan_progress['value'] = self.scan_progress['maximum']
                     except Exception:
                         pass
+                    try:
+                        self.eta_label.config(text="ETA 0:00")
+                    except Exception:
+                        pass
                     self.scan_status.config(text="Done ✔")
                 elif kind == "dupe_group":
                     _, gid, group = item
@@ -550,15 +589,50 @@ class App:
                         self.scan_progress['maximum'] = total
                         self.scan_progress['value'] = 0
                         self.progress_label.config(text=f"0% (0/{total})")
+                        self.eta_label.config(text="ETA —")
                     except Exception:
                         pass
                 elif kind == "progress":
                     _, scanned = item
                     try:
-                        total = float(self.scan_progress['maximum'] or 1)
+                        total = int(self.scan_progress['maximum'] or 1)
+                        # advance bar + label
                         self.scan_progress['value'] = scanned
-                        pct = (scanned / total) * 100.0
-                        self.progress_label.config(text=f"{pct:.0f}% ({scanned}/{int(total)})")
+                        pct = (scanned / float(total)) * 100.0
+                        self.progress_label.config(text=f"{pct:.0f}% ({scanned}/{total})")
+
+                        # --- ETA calculation (EMA-smoothed) ---
+                        now = time.time()
+                        prev_t = getattr(self, "_last_progress_t", None)
+                        prev_scanned = getattr(self, "_last_scanned", 0)
+                        if prev_t is not None:
+                            dt = max(1e-6, now - prev_t)
+                            dn = max(0, scanned - prev_scanned)
+                            inst_rate = dn / dt  # files per second
+                            if getattr(self, "_rate_ema", None) is None:
+                                self._rate_ema = inst_rate
+                            else:
+                                alpha = 0.2  # smoothing factor
+                                self._rate_ema = self._rate_ema + alpha * (inst_rate - self._rate_ema)
+                        self._last_progress_t = now
+                        self._last_scanned = scanned
+
+                        remaining = max(0, total - scanned)
+                        eta_seconds = None
+                        rate = getattr(self, "_rate_ema", None)
+                        if rate and rate > 1e-9:
+                            eta_seconds = remaining / rate
+                        else:
+                            # Fallback to overall average
+                            start_t = getattr(self, "_scan_start_time", None)
+                            if start_t:
+                                elapsed = max(1e-6, now - start_t)
+                                avg_rate = scanned / elapsed if scanned > 0 else 0.0
+                                if avg_rate > 1e-9:
+                                    eta_seconds = remaining / avg_rate
+
+                        self.eta_label.config(text=f"ETA {self._format_eta(eta_seconds)}")
+                        # --- end ETA ---
                     except Exception:
                         pass
         except queue.Empty:
