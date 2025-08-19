@@ -44,3 +44,24 @@ Usage:
 License:
 
 Licensed under the MIT License (free to use, modify, distribute).
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Changelog:
+
+v1.0.0 – Initial Release
+
+* Added basic GUI with tabs (Home, Scan, Duplicates, Recycle Bin).
+* Implemented file scanner with progress bar and report output.
+* Introduced duplicate file detection.
+* Integrated recycle bin management.
+
+v1.1.0 – Performance & Stability
+
+* Optimized memory usage with buffered file reads.
+* Added exception handling to prevent crashes on invalid paths.
+* Improved treeview population for large scan results.
+
+v1.2.0 – User Experience
+
+* Introduced minigame (Paper Toss) as a fun extra tab.
+* Improved status messages and better feedback during scans.
+* Polished UI layouts for clarity.
