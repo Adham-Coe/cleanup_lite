@@ -1,8 +1,10 @@
 # main.py
 # CleanUp Lite – Tkinter UI glue around scanner.py + recycle.py
+# PyInstaller-friendly: uses resource_path() and per-user config dir.
 
 from __future__ import annotations
 import os
+import sys
 import json
 import threading
 import queue
@@ -21,8 +23,42 @@ except Exception:  # pragma: no cover
     psutil = None
 
 APP_TITLE = "CleanUp Lite"
-SESSION_FILE = "session.json"
 MAX_THREADS = 4  # as per optimization guidance
+
+
+# ---------- Packaging helpers ----------
+def resource_path(relative_path: str) -> str:
+    """
+    Return an absolute path to a bundled resource.
+    Works both in PyInstaller and regular Python runs.
+    """
+    try:
+        base_path = sys._MEIPASS  # type: ignore[attr-defined]
+    except Exception:
+        base_path = os.path.abspath(os.path.dirname(__file__))
+    return os.path.join(base_path, relative_path)
+
+
+def get_config_dir() -> str:
+    """
+    Per-user writable config dir:
+      - Windows:  %APPDATA%/CleanUpLite
+      - macOS:    ~/Library/Application Support/CleanUp Lite
+      - Linux:    $XDG_CONFIG_HOME/cleanup-lite  or ~/.config/cleanup-lite
+    """
+    if sys.platform.startswith("win"):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        d = os.path.join(base, "CleanUpLite")
+    elif sys.platform == "darwin":
+        d = os.path.join(os.path.expanduser("~/Library/Application Support"), "CleanUp Lite")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+        d = os.path.join(base, "cleanup-lite")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+SESSION_FILE = os.path.join(get_config_dir(), "session.json")
 
 
 class App:
@@ -36,9 +72,10 @@ class App:
         self.style = ttk.Style(self.root)
         self.sun_valley = False
         try:
-            # Try Sun Valley if the file exists next to the exe/py
-            if os.path.exists("sun-valley.tcl"):
-                self.root.call("source", "sun-valley.tcl")
+            # Try Sun Valley if the file exists (bundled or next to script/exe)
+            sv_path = resource_path("sun-valley.tcl")
+            if os.path.exists(sv_path):
+                self.root.call("source", sv_path)
                 self.sun_valley = True
         except tk.TclError:
             self.sun_valley = False
@@ -267,14 +304,14 @@ class App:
         ttk.Button(t, text="Stop", command=self.stop).pack(side=tk.LEFT)
         ttk.Button(t, text="Move Selected to Recycle", command=self.move_selected_large).pack(side=tk.RIGHT)
 
-        # Progress bar row (new)
+        # Progress bar row
         pf = ttk.Frame(self.scan)
         pf.pack(fill=tk.X, **pad)
         self.scan_progress = ttk.Progressbar(pf, orient="horizontal", mode="determinate")
         self.scan_progress.pack(fill=tk.X, side=tk.LEFT, expand=True, padx=6)
         self.progress_label = ttk.Label(pf, text="0%")
         self.progress_label.pack(side=tk.LEFT)
-        # --- ETA label (ADDED) ---
+        # ETA label
         self.eta_label = ttk.Label(pf, text="ETA —")
         self.eta_label.pack(side=tk.LEFT, padx=8)
 
@@ -373,7 +410,7 @@ class App:
             pass
         self.progress_label.config(text="0%")
 
-        # --- Reset ETA state (ADDED) ---
+        # Reset ETA state
         self._scan_start_time = time.time()
         self._last_progress_t = None
         self._last_scanned = 0
@@ -390,7 +427,6 @@ class App:
                 for root_dir, dirs, files in os.walk(folder):
                     if self.stop_flag.is_set():
                         break
-                    # respect pause
                     self.pause_flag.wait()
                     total += len(files)
             except Exception:
@@ -403,12 +439,11 @@ class App:
                 pass
 
             # scanning pass: stat files and emit progress and results
-            scanned = 0
             try:
+                scanned = 0
                 for root_dir, dirs, files in os.walk(folder):
                     if self.stop_flag.is_set():
                         break
-                    # respect pause
                     self.pause_flag.wait()
                     for fname in files:
                         if self.stop_flag.is_set():
@@ -419,17 +454,12 @@ class App:
                         try:
                             size = os.path.getsize(path)
                         except Exception:
-                            # ignore stat errors
                             size = 0
                         scanned += 1
-                        # update progress
                         self.ui_queue.put(("progress", scanned))
-                        # if file meets large threshold, show it (keeps same UI messages)
                         if size >= min_bytes:
                             self.ui_queue.put(("large", path, size))
-                # done
             finally:
-                # ensure done message always sent
                 self.ui_queue.put(("large_done",))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -564,7 +594,6 @@ class App:
                     _, path, size = item
                     self.large_tree.insert('', tk.END, values=(path, self._human_mb(size)))
                 elif kind == "large_done":
-                    # When scan completes, ensure progress is set to full if possible
                     try:
                         if self.scan_progress['maximum'] and self.scan_progress['value'] < self.scan_progress['maximum']:
                             self.scan_progress['value'] = self.scan_progress['maximum']
@@ -582,7 +611,6 @@ class App:
                 elif kind == "dupe_done":
                     self.dupe_status.config(text="Done ✔")
                 elif kind == "scan_total":
-                    # initialize progress maximum
                     _, total = item
                     try:
                         total = max(1, int(total))
@@ -596,12 +624,11 @@ class App:
                     _, scanned = item
                     try:
                         total = int(self.scan_progress['maximum'] or 1)
-                        # advance bar + label
                         self.scan_progress['value'] = scanned
                         pct = (scanned / float(total)) * 100.0
                         self.progress_label.config(text=f"{pct:.0f}% ({scanned}/{total})")
 
-                        # --- ETA calculation (EMA-smoothed) ---
+                        # ETA calculation (EMA-smoothed)
                         now = time.time()
                         prev_t = getattr(self, "_last_progress_t", None)
                         prev_scanned = getattr(self, "_last_scanned", 0)
@@ -612,7 +639,7 @@ class App:
                             if getattr(self, "_rate_ema", None) is None:
                                 self._rate_ema = inst_rate
                             else:
-                                alpha = 0.2  # smoothing factor
+                                alpha = 0.2
                                 self._rate_ema = self._rate_ema + alpha * (inst_rate - self._rate_ema)
                         self._last_progress_t = now
                         self._last_scanned = scanned
@@ -623,7 +650,6 @@ class App:
                         if rate and rate > 1e-9:
                             eta_seconds = remaining / rate
                         else:
-                            # Fallback to overall average
                             start_t = getattr(self, "_scan_start_time", None)
                             if start_t:
                                 elapsed = max(1e-6, now - start_t)
@@ -632,7 +658,6 @@ class App:
                                     eta_seconds = remaining / avg_rate
 
                         self.eta_label.config(text=f"ETA {self._format_eta(eta_seconds)}")
-                        # --- end ETA ---
                     except Exception:
                         pass
         except queue.Empty:
@@ -713,6 +738,8 @@ class App:
         self._drag_active = False
         self._drag_hist = []  # (x, y, t)
 
+        # Track last size to avoid resize ping-pong
+        self._last_canvas_size = None
         self._game_setup()
 
     def _game_setup(self):
@@ -720,7 +747,12 @@ class App:
         c.update_idletasks()
         w = max(600, c.winfo_width())
         h = max(360, c.winfo_height())
-        c.config(width=w, height=h)
+
+        # Avoid unnecessary reconfigure loops on some Tk builds
+        if self._last_canvas_size != (w, h):
+            c.config(width=w, height=h)
+            self._last_canvas_size = (w, h)
+
         c.delete("all")
 
         floor_color = self.colors.get("floor_line", "#404040")
@@ -751,7 +783,11 @@ class App:
         c.tag_bind("paper", "<ButtonRelease-1>", self._paper_release)
 
         # Resize handling keeps basket/floor aligned when user resizes window
-        c.bind("<Configure>", lambda e: self._game_setup())
+        def _on_cfg(evt):
+            # Only rebuild if size actually changed
+            if (evt.width, evt.height) != self._last_canvas_size:
+                self._game_setup()
+        c.bind("<Configure>", _on_cfg)
 
     def _paper_press(self, event):
         self._drag_active = True
@@ -810,7 +846,6 @@ class App:
 
         # Collisions with walls/floor/ceiling
         x1, y1, x2, y2 = c.bbox(self.paper_id)
-        r = (x2 - x1) / 2.0
 
         # Left
         if x1 < 0:
@@ -829,7 +864,6 @@ class App:
         if y2 > floor_y:
             c.move(self.paper_id, 0, floor_y - y2)
             self._game_vy = -abs(self._game_vy) * bounce
-            # small horizontal damping on floor contact
             self._game_vx *= 0.9
 
         # Scoring: center inside goal area while moving downward
